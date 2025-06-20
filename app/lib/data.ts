@@ -2,12 +2,13 @@ import postgres from 'postgres';
 import {
   CustomerField,
   CustomersTableType,
+  Customer,
   InvoiceForm,
   InvoicesTable,
   LatestInvoiceRaw,
   Revenue,
 } from './definitions';
-import { formatCurrency } from './utils';
+import { formatCurrency, formatDateToLocal } from './utils';
 
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' });
 
@@ -93,7 +94,7 @@ export async function fetchFilteredInvoices(
   const offset = (currentPage - 1) * ITEMS_PER_PAGE;
 
   try {
-    const invoices = await sql<InvoicesTable[]>`
+    const data = await sql<InvoicesTable[]>`
       SELECT
         invoices.id,
         invoices.amount,
@@ -113,6 +114,11 @@ export async function fetchFilteredInvoices(
       ORDER BY invoices.date DESC
       LIMIT ${ITEMS_PER_PAGE} OFFSET ${offset}
     `;
+    const invoices = data.map((invoices) => ({
+      ...invoices,
+      amount: formatCurrency(invoices.amount),
+      date: formatDateToLocal(invoices.date),
+    }));
 
     return invoices;
   } catch (error) {
@@ -167,6 +173,27 @@ export async function fetchInvoiceById(id: string) {
   }
 }
 
+/**
+ * Fetches a single customer by ID.
+ * Used for pre-filling update forms.
+ * 
+ * @param id - Customer ID to fetch
+ * @returns Customer object or throws error
+ */
+export async function fetchCustomerById(id: string) {
+  try {
+    const data = await sql<Customer[]>`
+      SELECT id, name, email, image_url
+      FROM customers
+      WHERE id = ${id}
+    `;
+    return data[0]; // Returns first match or undefined
+  } catch (error) {
+    console.error('Database error:', error);
+    throw new Error('Failed to fetch customer.');
+  }
+}
+
 export async function fetchCustomers() {
   try {
     const customers = await sql<CustomerField[]>`
@@ -184,7 +211,11 @@ export async function fetchCustomers() {
   }
 }
 
-export async function fetchFilteredCustomers(query: string) {
+export async function fetchFilteredCustomers(
+  query: string,
+  currentPage: number
+) {
+  const offset = (currentPage - 1) * ITEMS_PER_PAGE;
   try {
     const data = await sql<CustomersTableType[]>`
 		SELECT
@@ -202,6 +233,7 @@ export async function fetchFilteredCustomers(query: string) {
         customers.email ILIKE ${`%${query}%`}
 		GROUP BY customers.id, customers.name, customers.email, customers.image_url
 		ORDER BY customers.name ASC
+    LIMIT ${ITEMS_PER_PAGE} OFFSET ${offset}
 	  `;
 
     const customers = data.map((customer) => ({
@@ -214,5 +246,22 @@ export async function fetchFilteredCustomers(query: string) {
   } catch (err) {
     console.error('Database Error:', err);
     throw new Error('Failed to fetch customer table.');
+  }
+}
+
+export async function fetchCustomersPages(query: string) {
+  try {
+    const data = await sql`SELECT COUNT(*)
+    FROM customers
+    WHERE
+      name ILIKE ${`%${query}%`} OR
+      email ILIKE ${`%${query}%`}
+    `;
+
+    const totalPages = Math.ceil(Number(data[0].count) / ITEMS_PER_PAGE);
+    return totalPages;
+  } catch (error) {
+    console.error('Database Error:', error);
+    throw new Error('Failed to fetch total number of customers.');
   }
 }

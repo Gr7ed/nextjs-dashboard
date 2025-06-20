@@ -139,3 +139,149 @@ export async function deleteInvoice(id: string) {
   revalidatePath('/dashboard/invoices');
   
 }
+
+/**
+ * Customer form schema with validation rules:
+ * - `id`: Auto-generated string
+ * - `name`: Required string (min 1 char)
+ * - `email`: Valid email format
+ * - `image_url`: Optional URL (must be valid if provided)
+ */
+const CustomerFormSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1, { message: 'Name is required.' }),
+  email: z.string().email({ message: 'Invalid email address.' }),
+  image_url: z.string().url().optional(), // Optional profile image
+});
+
+// For CREATE: Exclude auto-generated 'id'
+const CreateCustomer = CustomerFormSchema.omit({ id: true });
+
+// For UPDATE: Exclude 'id' (passed separately)
+const UpdateCustomer = CustomerFormSchema.omit({ id: true });
+
+/**
+ * Shape of the state object returned by customer actions:
+ * - `errors`: Field-specific validation errors (name/email/image_url)
+ * - `message`: General error message (e.g., database failures)
+ */
+export type CustomerState = {
+  errors?: {
+    name?: string[];
+    email?: string[];
+    image_url?: string[];
+  };
+  message?: string | null;
+};
+
+/**
+ * Creates a new customer in the database.
+ * Steps:
+ * 1. Validates form data (name, email, image_url)
+ * 2. Inserts into PostgreSQL via `sql`
+ * 3. Revalidates cache and redirects on success
+ * 
+ * @param prevState - Previous form state (for error handling)
+ * @param formData - Form data from the submission
+ * @returns State with errors or success redirect
+ */
+export async function createCustomer(prevState: CustomerState, formData: FormData) {
+  // Validate form fields
+  const validatedFields = CreateCustomer.safeParse({
+    name: formData.get('name'),
+    email: formData.get('email'),
+    image_url: formData.get('image_url'),
+  });
+
+  // Return early if invalid
+  if (!validatedFields.success) {
+    return {
+      errors: validatedFields.error.flatten().fieldErrors,
+      message: 'Missing fields. Failed to create customer.',
+    };
+  }
+
+  // Extract validated data
+  const { name, email, image_url } = validatedFields.data;
+
+  try {
+    // Insert into database
+    await sql`
+      INSERT INTO customers (name, email, image_url)
+      VALUES (${name}, ${email}, ${image_url ?? null})
+    `;
+  } catch (error) {
+    return { message: 'Database error: Failed to create customer.' };
+  }
+
+  // Refresh cache and redirect
+  revalidatePath('/dashboard/customers');
+  redirect('/dashboard/customers');
+}
+
+/**
+ * Updates an existing customer by ID.
+ * Steps:
+ * 1. Validates form data
+ * 2. Updates record in PostgreSQL
+ * 3. Revalidates cache and redirects
+ * 
+ * @param id - Customer ID to update
+ * @param formData - Updated fields (name/email/image_url)
+ */
+export async function updateCustomer(
+  id: string,
+  prevState: CustomerState,
+  formData: FormData
+) {
+  // Validate form fields (same as create)
+  const validatedFields = UpdateCustomer.safeParse({
+    name: formData.get('name'),
+    email: formData.get('email'),
+    image_url: formData.get('image_url'),
+  });
+
+  if (!validatedFields.success) {
+    return {
+      errors: validatedFields.error.flatten().fieldErrors,
+      message: 'Missing fields. Failed to update customer.',
+    };
+  }
+
+  const { name, email, image_url } = validatedFields.data;
+
+  try {
+    // Update database record
+    await sql`
+      UPDATE customers
+      SET 
+        name = ${name},
+        email = ${email},
+        image_url = ${image_url ?? null}
+      WHERE id = ${id}
+    `;
+  } catch (error) {
+    return { message: 'Database error: Failed to update customer.' };
+  }
+
+  // Refresh and redirect
+  revalidatePath('/dashboard/customers');
+  redirect('/dashboard/customers');
+}
+
+/**
+ * Deletes a customer by ID.
+ * - Handles referential integrity (ensure no linked invoices exist)
+ * - Revalidates cache after deletion
+ * 
+ * @param id - Customer ID to delete
+ * @throws Error if deletion fails
+ */
+export async function deleteCustomer(id: string) {
+  try {
+    await sql`DELETE FROM customers WHERE id = ${id}`;
+  } catch (error) {
+    throw new Error('Failed to delete customer (check for linked invoices).');
+  }
+  revalidatePath('/dashboard/customers');
+}
